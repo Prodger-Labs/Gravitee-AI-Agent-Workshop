@@ -10,6 +10,8 @@ from typing import Any
 from contextlib import asynccontextmanager
 from collections import OrderedDict
 
+import re
+from pathlib import Path
 from dotenv import load_dotenv
 from google.protobuf import struct_pb2
 
@@ -20,6 +22,8 @@ from agent.auth_service import AuthService, AuthenticationError
 from agent.logger import get_agent_logger
 
 from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
@@ -56,6 +60,63 @@ SYSTEM_PROMPT = os.getenv(
 )
 
 logger = get_agent_logger(__name__)
+
+PROSPECTS_DIR = Path(os.getenv("PROSPECTS_DIR", "/app/prospects"))
+
+_PROSPECT_RE = re.compile(r"^\s*\[P:([a-zA-Z0-9_-]+)\]\s*", re.IGNORECASE)
+
+
+def extract_prospect(text: str) -> tuple:
+    """Strip [P:{id}] prefix, return (prospect_id_or_None, clean_text)."""
+    m = _PROSPECT_RE.match(text)
+    if m:
+        return m.group(1).lower(), text[m.end():]
+    return None, text
+
+
+class ProspectRegistry:
+    """Loads system prompts from prospects/*.json, hot-reloadable."""
+
+    def __init__(self):
+        self._prompts: dict = {}
+        self.reload()
+
+    def reload(self) -> int:
+        if not PROSPECTS_DIR.is_dir():
+            logger.warning(f"PROSPECTS_DIR not found: {PROSPECTS_DIR}")
+            return 0
+        loaded = {}
+        for f in PROSPECTS_DIR.glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+                sp = data.get("system_prompt", "")
+                if sp:
+                    loaded[f.stem] = sp
+            except Exception as e:
+                logger.warning(f"Failed to load prospect {f.name}: {e}")
+        self._prompts = loaded
+        logger.info(f"Prospect registry: {len(loaded)} loaded — {sorted(loaded.keys())}")
+        return len(loaded)
+
+    def get(self, prospect_id) -> str:
+        if prospect_id and prospect_id in self._prompts:
+            return self._clean(self._prompts[prospect_id])
+        return SYSTEM_PROMPT
+
+    @staticmethod
+    def _clean(prompt: str) -> str:
+        """Strip /no_think directives and [P:slug] routing prefixes from stored prompts."""
+        lines = prompt.splitlines()
+        cleaned = []
+        for line in lines:
+            if line.strip().startswith("/no_think"):
+                continue
+            cleaned.append(re.sub(r"^\s*\[P:[a-zA-Z0-9_-]+\]\s*", "", line))
+        return "\n".join(cleaned).strip()
+
+
+registry = ProspectRegistry()
+
 
 MAX_CONVERSATIONS = 200
 MAX_HISTORY_MESSAGES = 40
@@ -179,6 +240,7 @@ class MCPAgent:
     async def process(
         self, message: str, token: str | None = None,
         transaction_id: str | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         # Build gateway headers: transaction ID for correlation + auth for MCP
         gw_headers = {}
@@ -194,8 +256,9 @@ class MCPAgent:
 
         # Step 2 — LLM decides which tool to call (no history — just current message + tools)
         try:
+            _prompt = system_prompt or SYSTEM_PROMPT
             content, tool_calls = await self.llm.process_query(
-                message, tools, system_prompt=SYSTEM_PROMPT,
+                message, tools, system_prompt=_prompt,
                 extra_headers=gw_headers or None,
             )
         except LLMRateLimitError as e:
@@ -229,7 +292,7 @@ class MCPAgent:
         # Step 4 — Reflect, LLM formats result for user, given the tool response
         try:
             response = await self.llm.process_tool_result(
-                message, tc, result, system_prompt=SYSTEM_PROMPT,
+                message, tc, result, system_prompt=_prompt,
                 extra_headers=gw_headers or None,
             )
             logger.info(f"Step 4 - LLM formatting: successfully formatted the tool result for user response.")
@@ -309,11 +372,16 @@ class HotelAgentExecutor(AgentExecutor):
                 await self._reply(event_queue, "No message content provided.", context_id, context.task_id)
                 return
 
-            logger.info(f"User prompt: {user_text[:150]}")
-            conversations.add(context_id, "user", user_text)
+            prospect_id, clean_text = extract_prospect(user_text)
+            prospect_prompt = registry.get(prospect_id)
+            logger.info(f"Prospect routing: id={prospect_id or chr(39)+chr(39)}, prompt_len={len(prospect_prompt)}")
+            logger.info(f"User prompt: {clean_text[:150]}")
+            conversations.add(context_id, "user", clean_text)
 
             # Race: pipeline vs elicitation request
-            tool_task = asyncio.create_task(self.agent.process(user_text, token, transaction_id=transaction_id))
+            tool_task = asyncio.create_task(
+                self.agent.process(clean_text, token, transaction_id=transaction_id, system_prompt=prospect_prompt)
+            )
             elicitation_wait = asyncio.create_task(elicitation_mgr.pending_queue.get())
             done, _ = await asyncio.wait({tool_task, elicitation_wait}, return_when=asyncio.FIRST_COMPLETED)
 
@@ -448,8 +516,25 @@ def create_app():
         agent_card=agent_card,
     )
 
+    async def reload_handler(request: Request):
+        # Accept optional push body: {"prospect_id": "kroll", "prospect_data": {...}}
+        if request.method == "POST":
+            try:
+                body = await request.json()
+                prospect_id = body.get("prospect_id")
+                prospect_data = body.get("prospect_data")
+                if prospect_id and prospect_data and isinstance(prospect_data, dict):
+                    dest = PROSPECTS_DIR / f"{prospect_id}.json"
+                    dest.write_text(json.dumps(prospect_data, indent=2))
+                    logger.info(f"Prospect push: wrote {dest}")
+            except Exception as e:
+                logger.warning(f"Reload body parse failed: {e}")
+        count = registry.reload()
+        return JSONResponse({"status": "ok", "loaded": count})
+
     routes = (
-        create_agent_card_routes(agent_card)
+        [Route("/admin/prospects/reload", reload_handler, methods=["GET", "POST"])]
+        + create_agent_card_routes(agent_card)
         + create_jsonrpc_routes(
             handler,
             rpc_url="/",

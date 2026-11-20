@@ -1224,7 +1224,7 @@ function expandInspector() {
     if (elements.inspectorExpandBtn) elements.inspectorExpandBtn.classList.add('hidden');
     // Lazy-load Agent Flow iframe on first expand
     if (!agentFlowLoaded && elements.agentFlowFrame) {
-        const inspectorUrl = `${location.protocol}//${location.hostname}:9002`;
+        const inspectorUrl = (window.APP_CONFIG && window.APP_CONFIG.inspectorUrl) || (location.protocol + "//" + location.hostname + ":9002");
         elements.agentFlowFrame.src = inspectorUrl;
         agentFlowLoaded = true;
     }

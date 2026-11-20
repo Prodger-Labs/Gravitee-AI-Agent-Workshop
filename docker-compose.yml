@@ -95,7 +95,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: >
-        sh -c ' response=$$(curl -s -u admin:adminadmin http://localhost:18082/_node/health); status=$$(echo "$$response" | grep "\"healthy\": true"); if [ -z "$$status" ]; then echo "false"; else echo "true"; fi ' > /dev/null
+        sh -c ' response=$$(curl -s -u ${GRAVITEE_NODE_LOGIN:?set in .env} http://localhost:18082/_node/health); status=$$(echo "$$response" | grep "\"healthy\": true"); if [ -z "$$status" ]; then echo "false"; else echo "true"; fi ' > /dev/null
       interval: 2s
       timeout: 2s
       retries: 10
@@ -123,7 +123,7 @@ services:
       - gravitee_alerts_alertengine_ws_discovery=true
       - gravitee_alerts_alertengine_ws_endpoints_0=http://alert-engine:8072
       - gravitee_alerts_alertengine_ws_security_username=admin
-      - gravitee_alerts_alertengine_ws_security_password=adminadmin
+      - gravitee_alerts_alertengine_ws_security_password=${GRAVITEE_ALERTS_ALERTENGINE_WS_SECURITY_PASSWORD}
       ### OPENTELEMETRY (sends spans to agent-live-graph for policy details)
       - gravitee_services_opentelemetry_enabled=true
       - gravitee_services_opentelemetry_exporter_endpoint=http://agent-live-graph:4318
@@ -167,7 +167,7 @@ services:
     healthcheck:
       test: >
         sh -c '
-        response=$$(curl -s -u admin:adminadmin http://localhost:18083/_node/health);
+        response=$$(curl -s -u ${GRAVITEE_NODE_LOGIN:?set in .env} http://localhost:18083/_node/health);
         if echo "$$response" | grep -Eq "\"healthy\"[[:space:]]*:[[:space:]]*false"; then exit 1; else exit 0; fi
         ' > /dev/null
       interval: 2s
@@ -200,7 +200,7 @@ services:
       - gravitee_alerts_alertengine_ws_discovery=true
       - gravitee_alerts_alertengine_ws_endpoints_0=http://alert-engine:8072
       - gravitee_alerts_alertengine_ws_security_username=admin
-      - gravitee_alerts_alertengine_ws_security_password=adminadmin
+      - gravitee_alerts_alertengine_ws_security_password=${GRAVITEE_ALERTS_ALERTENGINE_WS_SECURITY_PASSWORD}
     networks:
       - southbound
       - northbound
@@ -271,7 +271,7 @@ services:
     healthcheck:
       test: >
         sh -c '
-        response=$$(curl -s -u admin:adminadmin http://localhost:18093/_node/health);
+        response=$$(curl -s -u ${GRAVITEE_NODE_LOGIN:?set in .env} http://localhost:18093/_node/health);
         if echo "$$response" | grep -Eq "\"healthy\"[[:space:]]*:[[:space:]]*false"; then exit 1; else exit 0; fi
         ' > /dev/null
       interval: 2s
@@ -315,7 +315,7 @@ services:
     environment:
       - POSTGRES_DB=openfga
       - POSTGRES_USER=openfga
-      - POSTGRES_PASSWORD=openfga
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - openfga_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -333,7 +333,7 @@ services:
     command: migrate
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
-      - OPENFGA_DATASTORE_URI=postgres://openfga:openfga@openfga-postgres:5432/openfga?sslmode=disable
+      - OPENFGA_DATASTORE_URI=postgres://openfga:${POSTGRES_PASSWORD:?set in .env}@openfga-postgres:5432/openfga?sslmode=disable
     depends_on:
       openfga-postgres:
         condition: service_healthy
@@ -347,7 +347,7 @@ services:
     command: run
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
-      - OPENFGA_DATASTORE_URI=postgres://openfga:openfga@openfga-postgres:5432/openfga?sslmode=disable
+      - OPENFGA_DATASTORE_URI=postgres://openfga:${POSTGRES_PASSWORD:?set in .env}@openfga-postgres:5432/openfga?sslmode=disable
       - OPENFGA_LOG_FORMAT=json
       - OPENFGA_AUTHN_METHOD=none
     depends_on:
@@ -380,11 +380,11 @@ services:
       # Access Management (AM) configuration
       - AM_BASE_URL=http://am-management-api:8093
       - AM_USERNAME=admin
-      - AM_PASSWORD=adminadmin
+      - AM_PASSWORD=${AM_PASSWORD}
       # API Management (APIM) configuration
       - APIM_BASE_URL=http://apim-management-api:8083
       - APIM_USERNAME=admin
-      - APIM_PASSWORD=admin
+      - APIM_PASSWORD=${APIM_PASSWORD}
       - API_DEFINITIONS_DIR=/app/apim-apis
       # OpenFGA configuration
       - FGA_BASE_URL=http://openfga:8080
@@ -462,7 +462,7 @@ services:
     container_name: acme-hotel-website
     restart: unless-stopped
     ports:
-      - "8002:80"
+      - "127.0.0.1:8100:80"
     environment:
       - AGENT_CARD_URL=http://localhost:8082/hotel-agent/.well-known/agent-card.json
       - OIDC_URL=http://localhost:8092/gravitee/oidc/.well-known/openid-configuration
@@ -488,9 +488,9 @@ services:
       - LLM_TEMPERATURE=0.3
       - MCP_HTTP_URLS=http://gio-apim-gateway:8082/hotels/mcp
       - AGENT_SERVER_PORT=8001
-      - AM_TOKEN_URL=http://gio-am-gateway:8092/gravitee/oauth/token
+      - AM_TOKEN_URL=http://gateway:8092/gravitee/oauth/token
       - AM_CLIENT_ID=hotel-ai-agent
-      - AM_CLIENT_SECRET=hotel-ai-agent
+      - AM_CLIENT_SECRET=${AM_CLIENT_SECRET}
     ports:
       - "8001:8001"
     restart: unless-stopped
@@ -549,8 +549,6 @@ services:
       dockerfile: Dockerfile
     container_name: agent-live-graph
     restart: unless-stopped
-    ports:
-      - "9002:9002" # Web UI + WebSocket
     environment:
     ### Web UI Configuration
       - HTTP_PORT=9002 # Port for serving the Web UI and WebSocket

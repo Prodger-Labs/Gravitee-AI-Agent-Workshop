@@ -8,7 +8,8 @@ window.APP_CONFIG = {
     agentCardUrl: '${AGENT_CARD_URL}',
     oidcUrl: '${OIDC_URL}',
     clientId: '${CLIENT_ID}',
-    redirectUri: '${REDIRECT_URI}'
+    redirectUri: '${REDIRECT_URI}',
+    inspectorUrl: '${INSPECTOR_URL:-}'
 };
 EOF
 
