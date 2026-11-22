@@ -1,4 +1,4 @@
-FROM nginx:1.30-alpine
+FROM nginx:1.31-alpine
 
 # The fixes Alpine published since the image was built (brotli-libs 1.2.1 for CVE-2026-111497)
 RUN apk upgrade --no-cache
